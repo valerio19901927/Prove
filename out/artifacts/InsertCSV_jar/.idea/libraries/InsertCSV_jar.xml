@@ -1,0 +1,9 @@
+<component name="libraryTable">
+  <library name="InsertCSV_jar">
+    <CLASSES>
+      <root url="jar://$PROJECT_DIR$/InsertCSV_jar.jar!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>
