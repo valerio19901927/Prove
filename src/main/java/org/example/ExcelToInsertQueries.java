@@ -5,90 +5,34 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileWriter;
 import java.io.IOException;
-import java.sql.*;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.text.SimpleDateFormat;
 import java.util.UUID;
 
 import org.apache.poi.ss.usermodel.Cell;
+import org.apache.poi.ss.usermodel.DataFormatter;
+import org.apache.poi.ss.usermodel.DateUtil;
 import org.apache.poi.ss.usermodel.Row;
+import org.apache.poi.ss.util.NumberToTextConverter;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 
 public class ExcelToInsertQueries {
 
     public static void main(String[] args) {
-        String excelFilePath = "src/main/resources/FileNew.xlsx";
+        String excelFilePath = "src/main/resources/Book1.xlsx";
         String outputFilePath = "src/main/resources/insert.txt";
-
         try {
-            String[] columnNames = getColumnNamesFromDatabase("cms_anas_be", "gradi_giudizio");
-            generateInsertQueriesFromExcel(excelFilePath, outputFilePath, columnNames);
+            generateInsertQueriesFromExcel(excelFilePath, outputFilePath);
         } catch (Exception e) {
             e.printStackTrace();
         }
     }
 
-    private static String[] getColumnNamesFromDatabase(String schema, String tableName) throws Exception {
-        String[] columnNames = null;
-        try {
-            String jdbcUrl = "jdbc:mysql://anasbe.test.dc1.ns:3306/anas";
-            String username = "anas";
-            String password = "4N4S_password";
-
-            Connection connection = DriverManager.getConnection(jdbcUrl, username, password);
-
-            String query = "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS " +
-                    "WHERE TABLE_SCHEMA = '" + schema + "' AND TABLE_NAME = '" + tableName + "'";
-
-            Statement statement = connection.createStatement(ResultSet.TYPE_SCROLL_INSENSITIVE, ResultSet.CONCUR_READ_ONLY);
-
-            ResultSet resultSet = statement.executeQuery(query);
-
-            int columnCount = 0;
-            while (resultSet.next()) {
-                columnCount++;
-            }
-
-            resultSet.beforeFirst();
-
-            columnNames = new String[columnCount];
-            int index = 0;
-            while (resultSet.next()) {
-                columnNames[index++] = resultSet.getString("COLUMN_NAME");
-            }
-
-            resultSet.close();
-            statement.close();
-            connection.close();
-        } catch (Exception e) {
-            e.printStackTrace();
-            throw e;
-        }
-
-        return columnNames;
-    }
-
-    private static int getColumnIndex(Row headerRow, String columnName) {
-        for (Cell cell : headerRow) {
-            if (cell.getStringCellValue().equalsIgnoreCase(columnName)) {
-                return cell.getColumnIndex();
-            }
-        }
-        throw new IllegalArgumentException("Column '" + columnName + "' not found in the header row.");
-    }
-
-    private static String generateRandomId() {
-        return UUID.randomUUID().toString().replace("-", "").toUpperCase();
-    }
-
-    private static boolean containsColumn(String[] columnNames, String targetColumn) {
-        for (String columnName : columnNames) {
-            if (columnName.equalsIgnoreCase(targetColumn)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    public static void generateInsertQueriesFromExcel(String excelFilePath, String outputFilePath, String[] columnNames)
+    private static void generateInsertQueriesFromExcel(String excelFilePath, String outputFilePath)
             throws IOException, SQLException {
         FileInputStream excelFile = new FileInputStream(new File(excelFilePath));
         XSSFWorkbook workbook = new XSSFWorkbook(excelFile);
@@ -109,11 +53,24 @@ public class ExcelToInsertQueries {
             org.apache.poi.ss.usermodel.Sheet sheet = workbook.getSheetAt(0);
 
             Row headerRow = sheet.getRow(0);
+            if (headerRow == null) {
+                throw new IllegalStateException("Header row not found in the Excel sheet.");
+            }
             int colCount = headerRow.getPhysicalNumberOfCells();
 
             int tipoIndex = getColumnIndex(headerRow, "TIPO");
             int faseIndex = getColumnIndex(headerRow, "FASE");
             int autoritaIndex = getColumnIndex(headerRow, "AUTORITA");
+
+            StringBuilder insertQuery = new StringBuilder("INSERT INTO cms_anas_be.gradi_giudizio (ID, ");
+
+            // Aggiunge i nomi delle colonne dinamicamente
+            for (int i = 0; i < colCount; i++) {
+                insertQuery.append(headerRow.getCell(i).getStringCellValue() + ", ");
+            }
+            // Aggiunge l'ultima parte della query dopo l'elenco delle colonne
+            insertQuery.setLength(insertQuery.length() - 2);
+            insertQuery.append(") VALUES ");
 
             for (Row row : sheet) {
                 if (row.getRowNum() == 0) {
@@ -124,9 +81,9 @@ public class ExcelToInsertQueries {
                 Cell faseCell = row.getCell(faseIndex);
                 Cell autoritaCell = row.getCell(autoritaIndex);
 
-                selectStatement.setObject(1, tipoCell.getStringCellValue());
-                selectStatement.setObject(2, faseCell.getStringCellValue());
-                selectStatement.setObject(3, autoritaCell.getStringCellValue());
+                selectStatement.setObject(1, getCellValueAsString(tipoCell));
+                selectStatement.setObject(2, getCellValueAsString(faseCell));
+                selectStatement.setObject(3, getCellValueAsString(autoritaCell));
 
                 ResultSet resultSet = selectStatement.executeQuery();
                 resultSet.next();
@@ -134,71 +91,47 @@ public class ExcelToInsertQueries {
 
                 resultSet.close();
 
-                // Se la tripletta non è presente, genera la query di inserimento
+                // Se la tripletta non è presente, aggiungi i valori alla query
                 if (rowCount == 0) {
-                    StringBuilder insertQuery = new StringBuilder("INSERT INTO cms_anas_be.gradi_giudizio (");
-
-                    // Aggiunge i nomi delle colonne dinamicamente
-                    for (int i = 0; i < colCount; i++) {
-                        // Seleziona il nome della colonna solo se è presente nell'intestazione
-                        if (i < headerRow.getPhysicalNumberOfCells()) {
-                            String columnName = columnNames[i];
-                            insertQuery.append(columnName + ", ");
-                        }
-                    }
-
-                    // Verifica se le colonne VALORE_MINIMO e FLAG_OLD sono presenti
-                    if (containsColumn(columnNames, "VALORE_MINIMO")) {
-                        insertQuery.append("VALORE_MINIMO, ");
-                    }
-
-                    if (containsColumn(columnNames, "FLAG_OLD")) {
-                        insertQuery.append("FLAG_OLD, ");
-                    }
-
-                    // Rimuovi l'ultima virgola e spazio
-                    insertQuery.setLength(insertQuery.length() - 2);
-
-                    insertQuery.append(") VALUES (");
+                    insertQuery.append("(");
 
                     // Aggiunge l'ID alfanumerico generato casualmente
                     String randomId = generateRandomId();
                     insertQuery.append("'" + randomId + "', ");
 
                     // Aggiunge i valori delle colonne dinamicamente
+                    DataFormatter dataFormatter = new DataFormatter();
                     for (int i = 0; i < colCount; i++) {
                         Cell dataCell = row.getCell(i);
 
-                        Object cellValue;
+                        // Aggiungi il valore della cella solo se non è nullo
+                        if (dataCell != null) {
+                            String cellValue;
 
-                        if (dataCell.getCellType() == Cell.CELL_TYPE_NUMERIC) {
-                            if (dataCell.getNumericCellValue() == Math.floor(dataCell.getNumericCellValue())) {
-                                cellValue = (int) dataCell.getNumericCellValue();
+                            if (dataCell.getCellType() == Cell.CELL_TYPE_NUMERIC) {
+                                cellValue = dataFormatter.formatCellValue(dataCell);
                             } else {
-                                cellValue = dataCell.getNumericCellValue();
+                                cellValue = getCellValueAsString(dataCell);
                             }
-                        } else {
-                            cellValue = dataCell.getStringCellValue();
-                        }
 
-                        // Aggiungi il valore della cella
-                        insertQuery.append("'" + cellValue + "', ");
+                            // Aggiungi il valore della cella
+                            insertQuery.append("'" + cellValue + "', ");
+                        }
                     }
 
                     // Rimuovi l'ultima virgola e spazio
                     insertQuery.setLength(insertQuery.length() - 2);
 
-                    // Aggiunge il valore fisso 'N' per FLAG_OLD
-                    insertQuery.append(",'N')");
-
-                    // Aggiunge la parentesi chiusa e punto e virgola
-                    insertQuery.append(";");
-
-                    writer.write(insertQuery.toString());
-                    writer.newLine();
+                    // Aggiunge la parentesi chiusa
+                    insertQuery.append("), ");
                 }
             }
 
+            // Rimuovi l'ultima virgola e spazio
+            insertQuery.setLength(insertQuery.length() - 2);
+
+            writer.write(insertQuery.toString());
+            writer.newLine();
             System.out.println("Query di inserimento generate con successo.");
 
         } catch (Exception e) {
@@ -219,6 +152,34 @@ public class ExcelToInsertQueries {
             if (writer != null) {
                 writer.close();
             }
+        }
+    }
+
+    private static int getColumnIndex(Row headerRow, String columnName) {
+        for (Cell cell : headerRow) {
+            if (cell.getStringCellValue().equalsIgnoreCase(columnName)) {
+                return cell.getColumnIndex();
+            }
+        }
+        throw new IllegalArgumentException("Column '" + columnName + "' not found in the header row.");
+    }
+
+    private static String generateRandomId() {
+        return UUID.randomUUID().toString().replace("-", "").toUpperCase();
+    }
+
+    private static String getCellValueAsString(Cell cell) {
+        if (cell == null || cell.getCellType() == Cell.CELL_TYPE_BLANK) {
+            return ""; // Restituisci una stringa vuota se la cella è vuota
+        } else if (cell.getCellType() == Cell.CELL_TYPE_NUMERIC) {
+            if (DateUtil.isCellDateFormatted(cell)) {
+                SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+                return dateFormat.format(cell.getDateCellValue());
+            } else {
+                return NumberToTextConverter.toText(cell.getNumericCellValue());
+            }
+        } else {
+            return cell.getStringCellValue();
         }
     }
 }
